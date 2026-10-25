@@ -1,6 +1,6 @@
 # 青龙掌控 · qinglong-app
 
-基于 Flutter 的青龙面板 Android 管理客户端。连接已有面板，在手机上管理任务、环境变量、脚本和订阅。
+基于 Flutter 的青龙面板 Android 管理客户端。连接已有面板，在手机上管理任务、环境变量、脚本和订阅。目前仅支持安卓端，iOS和鸿蒙端请有能力者自行开发
 
 [下载最新版本](https://github.com/muzixing666/qinglong-app/releases/latest) · [所有版本](https://github.com/muzixing666/qinglong-app/releases) · [构建说明](docs/BUILD.md) · [用户协议](docs/USER_AGREEMENT.txt)
 
