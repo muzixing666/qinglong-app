@@ -1,0 +1,14 @@
+.tools/
+**/build/
+**/.dart_tool/
+**/.gradle/
+**/local.properties
+**/node_modules/
+*.jks
+*.keystore
+*.apk
+*.aab
+*.log
+.idea/
+*.iml
+**/__pycache__/
