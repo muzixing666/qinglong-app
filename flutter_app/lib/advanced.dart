@@ -133,14 +133,7 @@ extension Settings on HomeState {
       }),
     );
     if (option == 'history') {
-      await route(
-        LogPage(
-          host: this,
-          title: '登录记录',
-          path: '/user/login-log',
-          scope: m.epoch,
-        ),
-      );
+      await route(LoginHistoryPage(host: this));
     }
     if (option == 'password') {
       await form(

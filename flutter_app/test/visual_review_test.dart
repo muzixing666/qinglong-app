@@ -16,7 +16,7 @@ class PreviewNative extends Native {
         'servers': [],
         'activeId': '',
         'nativeDock': false,
-        'version': '0.21.0',
+        'version': '0.22.0',
       };
     }
     if (action == 'forecastTasks') {
@@ -53,7 +53,7 @@ void main() {
         await loader.load();
       }
     });
-    final output = Directory('../dist/flutter-ui-v26')
+    final output = Directory('../dist/flutter-ui-v27')
       ..createSync(recursive: true);
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 3;

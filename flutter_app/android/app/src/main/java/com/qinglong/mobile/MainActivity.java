@@ -52,6 +52,8 @@ public final class MainActivity extends FlutterActivity {
     private MethodChannel channel;
     private final HashMap<String,MethodChannel.Result> replies=new HashMap<>();
     private CodeEditorFactory editors;
+    private String shortcutPage, startupShortcut;
+    private android.widget.Toast feedbackToast;
     private ProfileStore store;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final HashMap<String, QinglongApi> clients = new HashMap<>();
@@ -99,17 +101,45 @@ public final class MainActivity extends FlutterActivity {
         engine.getPlatformViewsController().getRegistry().registerViewFactory("ql-code-editor",editors);
         channel.setMethodCallHandler((call,result)->{
             try {
-                if(call.method.equals("editorGet")){editors.getText(result);return;}
+                if(call.method.equals("toast")){
+                    if(feedbackToast!=null)feedbackToast.cancel();
+                    feedbackToast=android.widget.Toast.makeText(this,(String)call.arguments,android.widget.Toast.LENGTH_SHORT);feedbackToast.show();result.success(null);return;
+                }
+                if(call.method.equals("consumeShortcut")){String page=shortcutPage;shortcutPage=null;if(getIntent()!=null)getIntent().removeExtra("shortcut_page");result.success(page);return;}
+                if(call.method.equals("widgetState")){
+                    JSONObject data=new JSONObject((java.util.Map)call.arguments);
+                    worker.execute(()->{try{
+                        if(data.optString("serverId").equals(store.read().optString("activeId"))){
+                            JSONObject previous=PanelWidgetProvider.snapshot(this);
+                            if((data.optInt("total",-1)<0||data.optLong("updated")<previous.optLong("updated"))&&data.optString("serverId").equals(previous.optString("serverId"))&&previous.optInt("total",-1)>=0){previous.put("panel",data.optString("panel"));PanelWidgetProvider.publish(this,previous);}
+                            else PanelWidgetProvider.publish(this,data);
+                        }
+                    }catch(Exception ignored){}});
+                    result.success(null);return;
+                }
+                if(call.method.equals("desktopCapabilities")){
+                    HashMap<String,Object> info=new HashMap<>();
+                    info.put("shortcuts",getSystemService(android.content.pm.ShortcutManager.class).getManifestShortcuts().size());
+                    info.put("pinSupported",android.appwidget.AppWidgetManager.getInstance(this).isRequestPinAppWidgetSupported());
+                    info.put("widgets",android.appwidget.AppWidgetManager.getInstance(this).getAppWidgetIds(new android.content.ComponentName(this,PanelWidgetProvider.class)).length);
+                    result.success(info);return;
+                }
+                if(call.method.equals("pinWidget")){
+                    android.appwidget.AppWidgetManager wm=android.appwidget.AppWidgetManager.getInstance(this);
+                    result.success(wm.isRequestPinAppWidgetSupported()&&wm.requestPinAppWidget(new android.content.ComponentName(this,PanelWidgetProvider.class),null,null));return;
+                }
+                if(call.method.equals("editorRecovery")){editors.recovery(call.arguments,result);return;}
+                if(call.method.equals("editorGet")){editors.getText(call.arguments,result);return;}
                 if(call.method.equals("editorWarm")){editors.warm();result.success(null);return;}
-                if(call.method.equals("editorReady")){editors.isReady(result);return;}
+                if(call.method.equals("editorReady")){editors.isReady(call.arguments,result);return;}
                 if(call.method.equals("openExternal")){
                     android.net.Uri uri=android.net.Uri.parse((String)call.arguments);
                     if(!"https".equals(uri.getScheme())||!"github.com".equals(uri.getHost())){result.error("URL","无效下载地址",null);return;}
                     try{startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,uri));result.success(null);}
                     catch(Exception e){result.error("URL","没有可以打开此链接的浏览器，请复制地址",null);}return;
                 }
-                if(call.method.equals("editorInsert")){editors.insert((String)call.arguments);result.success(null);return;}
-                if(call.method.equals("editorAction")){editors.action((String)call.arguments);result.success(null);return;}
+                if(call.method.equals("editorInsert")){editors.insert(call.arguments);result.success(null);return;}
+                if(call.method.equals("editorAction")){editors.action(call.arguments);result.success(null);return;}
                 if(!call.method.equals("call")){result.notImplemented();return;}
                 JSONObject message=new JSONObject((String)call.arguments);
                 String id=UUID.randomUUID().toString(); message.put("id",id); replies.put(id,result);
@@ -132,6 +162,7 @@ public final class MainActivity extends FlutterActivity {
     }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        shortcutPage=getIntent().getStringExtra("shortcut_page");startupShortcut=shortcutPage;
         applySystemBars(getSharedPreferences("flutter_appearance",0).getBoolean("dark",false));
         WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE)!=0);
         android.view.View root=findViewById(android.R.id.content);
@@ -147,6 +178,10 @@ public final class MainActivity extends FlutterActivity {
             int bottom=Build.VERSION.SDK_INT>=30?insets.getInsets(android.view.WindowInsets.Type.systemBars()).bottom:Math.min(insets.getStableInsetBottom(),insets.getSystemWindowInsetBottom());
             dockHost.setBottomInset(bottom);return insets;
         });root.requestApplyInsets();
+    }
+    @Override public void onNewIntent(android.content.Intent intent){
+        super.onNewIntent(intent);setIntent(intent);shortcutPage=intent.getStringExtra("shortcut_page");
+        if(shortcutPage!=null&&channel!=null)channel.invokeMethod("shortcutNavigate",null);
     }
     private void sendBridgeReply(String id,boolean ok,Object value){
         try{
@@ -451,7 +486,7 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private JSONObject publicState(JSONObject vault) throws Exception {
-        JSONObject result = new JSONObject().put("activeId", vault.optString("activeId")).put("version", "0.21.0");
+        JSONObject result = new JSONObject().put("activeId", vault.optString("activeId")).put("version", "0.22.0");
         JSONArray list = new JSONArray();
         JSONArray full = vault.getJSONArray("servers");
         for (int i = 0; i < full.length(); i++) {
@@ -478,7 +513,7 @@ public final class MainActivity extends FlutterActivity {
         if (payload == null) payload = new JSONObject();
         JSONObject vault = store.read();
         switch (action) {
-            case "bootstrap": return publicState(vault).put("pickerInterrupted", pickerInterrupted).put("nativeDock",true).put("dark",getSharedPreferences("flutter_appearance",0).getBoolean("dark",false)).put("textScale",getSharedPreferences("flutter_appearance",0).getFloat("textScale",1f));
+            case "bootstrap": return publicState(vault).put("pickerInterrupted", pickerInterrupted).put("nativeDock",true).put("shortcutPage",startupShortcut==null?"":startupShortcut).put("dark",getSharedPreferences("flutter_appearance",0).getBoolean("dark",false)).put("textScale",getSharedPreferences("flutter_appearance",0).getFloat("textScale",1f));
             case "fetchText": {
                 ScriptImportReader.Document doc = RemoteScriptReader.read(payload.getString("url"), payload.getString("filename"), payload.optBoolean("allowHttp"), payload.optString("kind").equals("configs"));
                 return new JSONObject().put("filename", doc.filename).put("content", doc.content).put("sizeBytes", doc.sizeBytes).put("encoding", "UTF-8").put("cancelled", false);
@@ -500,7 +535,7 @@ public final class MainActivity extends FlutterActivity {
             case "appearance": {
                 boolean dark=payload.optBoolean("dark");
                 getSharedPreferences("flutter_appearance",0).edit().putBoolean("dark",dark).putFloat("textScale",(float)payload.optDouble("textScale",getSharedPreferences("flutter_appearance",0).getFloat("textScale",1f))).apply();
-                runOnUiThread(() -> applySystemBars(dark)); return new JSONObject();
+                runOnUiThread(() -> applySystemBars(dark));PanelWidgetProvider.renderAll(this); return new JSONObject();
             }
             case "saveServer": {
                 String id = payload.optString("id");

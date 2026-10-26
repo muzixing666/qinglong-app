@@ -279,6 +279,20 @@ extension _ReplicaResources on _ResourcePageState {
                           ),
                           const SizedBox(width: 4),
                         ],
+                        if (key == 'envs') ...[
+                          Expanded(
+                            child: _compactButton(
+                              c,
+                              groupEnvs ? '列表' : '分组',
+                              groupEnvs
+                                  ? Icons.view_list_rounded
+                                  : Icons.account_tree_outlined,
+                              () => update(() => groupEnvs = !groupEnvs),
+                              soft: true,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
                         Expanded(
                           child: _compactButton(
                             c,
@@ -502,6 +516,8 @@ extension _ReplicaResources on _ResourcePageState {
                       ),
                     ],
                   )
+                : key == 'envs'
+                ? environmentList(list)
                 : ListView.builder(
                     key: PageStorageKey('$key-$directory'),
                     padding: const EdgeInsets.fromLTRB(12, 9, 12, 94),
@@ -543,7 +559,15 @@ extension _ReplicaResources on _ResourcePageState {
     }
   }
 
-  Widget replicaItem(BuildContext c, Json row, int index, int length) {
+  Widget replicaItem(
+    BuildContext c,
+    Json row,
+    int index,
+    int length, {
+    bool draggable = false,
+    bool dragEnabled = true,
+    int? position,
+  }) {
     final task = key == 'tasks',
         env = key == 'envs',
         file = ['scripts', 'configs', 'logs'].contains(key),
@@ -629,6 +653,15 @@ extension _ReplicaResources on _ResourcePageState {
               ),
               const SizedBox(width: 7),
             ],
+            if (env && draggable)
+              ReorderableDragStartListener(
+                index: index,
+                enabled: dragEnabled,
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(Icons.drag_handle, size: 21),
+                ),
+              ),
             if (env) ...[
               Container(
                 width: 23,
@@ -640,7 +673,7 @@ extension _ReplicaResources on _ResourcePageState {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  '${index + 1}'.padLeft(2, '0'),
+                  '${position ?? index + 1}'.padLeft(2, '0'),
                   style: TextStyle(
                     fontSize: 10,
                     color: Theme.of(c).colorScheme.onSurfaceVariant,
@@ -1021,6 +1054,9 @@ extension _ReplicaResources on _ResourcePageState {
             color: Colors.transparent,
             child: InkWell(
               onTap: onTap,
+              onLongPress: ['scripts', 'logs'].contains(key)
+                  ? () => fileLongPress(row)
+                  : null,
               child: Container(
                 decoration: BoxDecoration(
                   border: env || task && (off || active)
@@ -1332,8 +1368,21 @@ Widget replicaMore(BuildContext c, HomeState h) {
         entry('连接管理', Icons.dns_outlined, () => h.route(ServersPage(host: h))),
         entry('文字大小', Icons.text_fields, () => h.fontSettings()),
         entry('日志清理', Icons.auto_delete_outlined, () => h.logCleanup()),
-        entry('下载与更新', Icons.download_outlined, () => h.route(const AppInfoPage())),
-        entry('用户协议', Icons.description_outlined, () => h.route(const AppInfoPage(agreement: true))),
+        entry(
+          '桌面快捷与小组件',
+          Icons.widgets_outlined,
+          () => h.route(const DesktopPage()),
+        ),
+        entry(
+          '下载与更新',
+          Icons.download_outlined,
+          () => h.route(const AppInfoPage()),
+        ),
+        entry(
+          '用户协议',
+          Icons.description_outlined,
+          () => h.route(const AppInfoPage(agreement: true)),
+        ),
         entry(
           '关于',
           Icons.info_outline,
@@ -1341,6 +1390,18 @@ Widget replicaMore(BuildContext c, HomeState h) {
           subtitle: '青龙掌控 ${h.m.appVersion} · Flutter',
         ),
       ]),
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: Text(
+            'by：Muzixing',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(c).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
     ],
   );
 }

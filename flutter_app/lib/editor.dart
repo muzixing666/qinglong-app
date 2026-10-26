@@ -186,24 +186,39 @@ extension Files on HomeState {
       await form(
         '上传脚本与定时任务',
         [
-          Field('filename', '文件名', required: true, changed: destinationChanged),
-          Field('path', '目标目录（留空为根目录）', changed: destinationChanged),
-          const Field('overwrite', '允许覆盖已有脚本', toggle: true),
+          Field(
+            'filename',
+            '文件名',
+            section: '脚本文件',
+            required: true,
+            changed: destinationChanged,
+          ),
+          Field(
+            'path',
+            '目标目录',
+            section: '脚本文件',
+            help: '留空上传到根目录',
+            changed: destinationChanged,
+          ),
+          const Field('overwrite', '允许覆盖已有脚本', section: '脚本文件', toggle: true),
           const Field(
             'createTask',
             '同时创建定时任务',
+            section: '定时任务',
             toggle: true,
-            help: '一次提交完成上传与建任务；不会立即执行脚本',
+            help: '上传后添加任务，不立即运行',
           ),
           Field(
             'name',
             '任务名称',
+            section: '定时任务',
             required: true,
             visible: (v) => flag(v['createTask']),
           ),
           Field(
             'command',
             '执行命令',
+            section: '定时任务',
             required: true,
             multiline: true,
             visible: (v) => flag(v['createTask']),
@@ -211,8 +226,9 @@ extension Files on HomeState {
           Field(
             'schedule',
             '定时规则',
+            section: '定时任务',
             required: true,
-            help: '支持 5 / 6 位 cron；请核对脚本自动识别结果',
+            help: '支持 5 / 6 位 cron，可使用下方预设',
             presets: taskSchedulePresets,
             visible: (v) => flag(v['createTask']),
           ),
@@ -330,10 +346,35 @@ class _EditorPageState extends State<EditorPage> {
   bool ready = false;
   String? loadingError;
   int editorVersion = 0;
+  int? editorId;
+  bool checkingBack = false;
   @override
   void initState() {
     super.initState();
+    h.leaveGuards[this] = () async {
+      if (!mounted) return true;
+      if (busy || checkingBack) return false;
+      if (!ready) return true;
+      try {
+        final text = editorText(await h.m.native.editorGet(editorId));
+        if (!mounted || text == saved) return true;
+        return await h.overlay(
+          () => confirm(context, '放弃未保存的修改？', '切换页面后当前修改将丢失。'),
+        );
+      } catch (_) {
+        if (!mounted) return true;
+        return await h.overlay(
+          () => confirm(context, '编辑器连接异常', '切换页面会关闭编辑器，未保存的内容可能丢失。确认切换？'),
+        );
+      }
+    };
     if (widget.load != null) unawaited(loadContent(widget.load!));
+  }
+
+  @override
+  void dispose() {
+    h.leaveGuards.remove(this);
+    super.dispose();
   }
 
   Future<void> loadContent(Future<String> pending) async {
@@ -356,12 +397,13 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   Future<void> waitForEditor(int id) async {
+    editorId = id;
     final generation = editorVersion;
     for (var attempt = 0; attempt < 50; attempt++) {
       if (!mounted || generation != editorVersion) return;
       try {
         if (await Native.channel
-                .invokeMethod<bool>('editorReady')
+                .invokeMethod<bool>('editorReady', id)
                 .timeout(const Duration(seconds: 2)) ==
             true) {
           if (mounted && generation == editorVersion) {
@@ -378,30 +420,75 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   Future<void> back() async {
-    if (busy) return;
-    if (!ready) {
+    if (busy || checkingBack || leaving) return;
+    checkingBack = true;
+    try {
+      if (ready) {
+        try {
+          final text = editorText(await h.m.native.editorGet(editorId));
+          if (text != saved &&
+              !await h.overlay(
+                () => confirm(context, '放弃未保存的修改？', '返回后当前修改将丢失。'),
+              )) {
+            return;
+          }
+        } catch (_) {
+          if (!mounted) return;
+          final choice = await h.overlay(
+            () => showDialog<String>(
+              context: context,
+              builder: (c) => AlertDialog(
+                title: const Text('编辑器连接异常'),
+                content: const Text(
+                  '暂时无法读取当前内容。可以复制最近同步的内容后返回，或直接离开；未同步的修改可能丢失。',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(c, 'cancel'),
+                    child: const Text('取消'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(c, 'leave'),
+                    child: const Text('直接返回'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(c, 'copy'),
+                    child: const Text('复制内容并返回'),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (choice == null || choice == 'cancel') return;
+          if (choice == 'copy') {
+            try {
+              final recovery = await Native.channel
+                  .invokeMethod<String>('editorRecovery', editorId)
+                  .timeout(const Duration(seconds: 2));
+              if (recovery == null) throw ApiFailure('没有可恢复内容');
+              await h.m.native.call('copyText', {'text': recovery});
+            } catch (_) {
+              if (mounted) {
+                showError(context, ApiFailure('内容复制失败，可取消后重试或选择直接返回'));
+              }
+              return;
+            }
+          }
+        }
+      }
+      if (!mounted) return;
       setState(() => leaving = true);
       Navigator.pop(context);
-      return;
+    } finally {
+      checkingBack = false;
     }
-    await guard(context, () async {
-      final text = editorText(await h.m.native.editorGet());
-      if (text != saved &&
-          !await h.overlay(
-            () => confirm(context, '放弃未保存的修改？', '返回后当前修改将丢失。'),
-          )) {
-        return;
-      }
-      setState(() => leaving = true);
-      if (mounted) Navigator.pop(context);
-    });
   }
 
   Future<void> save() async {
     setState(() => busy = true);
     try {
       scope();
-      final text = editorText(await h.m.native.editorGet());
+      final text = editorText(await h.m.native.editorGet(editorId));
       if (text == saved) return;
       await h.m.api(
         widget.kind == 'configs' ? 'POST' : 'PUT',
@@ -415,11 +502,7 @@ class _EditorPageState extends State<EditorPage> {
               },
       );
       saved = text;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已保存'), duration: Duration(seconds: 1)),
-        );
-      }
+      if (mounted) showAppToast('已保存');
     } catch (e) {
       if (mounted) showError(context, e);
     } finally {
@@ -445,11 +528,11 @@ class _EditorPageState extends State<EditorPage> {
       if (operation == 'export') {
         await h.m.native.call('exportText', {
           'filename': filename,
-          'content': await h.m.native.editorGet(),
+          'content': await h.m.native.editorGet(editorId),
         });
       }
       if (operation == 'task') {
-        final text = await h.m.native.editorGet();
+        final text = await h.m.native.editorGet(editorId);
         final initial = scriptMetadata(filename, text);
         initial['command'] = scriptCommand(
           filename,
@@ -472,7 +555,7 @@ class _EditorPageState extends State<EditorPage> {
         );
       }
       if (operation == 'history') {
-        if (editorText(await h.m.native.editorGet()) != saved) {
+        if (editorText(await h.m.native.editorGet(editorId)) != saved) {
           throw ApiFailure('请先保存或撤销当前修改后查看历史');
         }
         final restored = await h.route<bool>(
@@ -531,7 +614,7 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   Future<void> scanDependencies() async {
-    final text = await h.m.native.editorGet();
+    final text = await h.m.native.editorGet(editorId);
     final python = filename.endsWith('.py');
     final pattern = python
         ? RegExp(r'^\s*(?:from|import)\s+([a-zA-Z_]\w*)', multiLine: true)
@@ -669,10 +752,10 @@ class _EditorPageState extends State<EditorPage> {
                             final value = await h.m.native.call(
                               'readClipboardText',
                             );
-                            await Native.channel.invokeMethod(
-                              'editorInsert',
-                              str(value['text']),
-                            );
+                            await Native.channel.invokeMethod('editorInsert', {
+                              'viewId': editorId,
+                              'text': str(value['text']),
+                            });
                           }),
                         ),
                         _compactButton(
@@ -688,7 +771,10 @@ class _EditorPageState extends State<EditorPage> {
                               if (size == null || size < 10 || size > 24) {
                                 throw ApiFailure('请输入 10–24 的字号');
                               }
-                              await h.m.native.editorAction('font:$size');
+                              await h.m.native.editorAction(
+                                'font:$size',
+                                editorId,
+                              );
                             },
                           ),
                         ),
@@ -702,7 +788,7 @@ class _EditorPageState extends State<EditorPage> {
                             context,
                             e.value.$1,
                             e.value.$2,
-                            () => h.m.native.editorAction(e.key),
+                            () => h.m.native.editorAction(e.key, editorId),
                           ),
                         _compactButton(
                           context,
@@ -717,7 +803,10 @@ class _EditorPageState extends State<EditorPage> {
                               if (line == null || line < 1) {
                                 throw ApiFailure('请输入有效行号');
                               }
-                              await h.m.native.editorAction('jump:$line');
+                              await h.m.native.editorAction(
+                                'jump:$line',
+                                editorId,
+                              );
                             },
                           ),
                         ),
@@ -1004,6 +1093,20 @@ class _LogPageState extends State<LogPage> with WidgetsBindingObserver {
         overflow: TextOverflow.ellipsis,
       ),
       actions: [
+        IconButton(
+          tooltip: '返回顶部',
+          icon: const Icon(Icons.vertical_align_top),
+          onPressed: () {
+            if (scroll.hasClients) {
+              follow = false;
+              scroll.animateTo(
+                0,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
+              );
+            }
+          },
+        ),
         IconButton(
           tooltip: searching ? '关闭搜索' : '搜索',
           onPressed: () {

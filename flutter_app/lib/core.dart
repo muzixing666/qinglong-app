@@ -169,16 +169,22 @@ class Native {
         int.tryParse(str(packet['errorInfo']?['httpStatus'])) ?? 0,
       );
     }
+    if (action == 'copyText') {
+      unawaited(channel.invokeMethod<void>('toast', '已复制').catchError((_) {}));
+    }
     return packet['data'];
   }
 
-  Future<String> editorGet() async =>
+  Future<String> editorGet([int? viewId]) async =>
       await channel
-          .invokeMethod<String>('editorGet')
-          .timeout(const Duration(seconds: 10)) ??
+          .invokeMethod<String>('editorGet', viewId)
+          .timeout(const Duration(seconds: 3)) ??
       '';
-  Future<void> editorAction(String action) =>
-      channel.invokeMethod('editorAction', action);
+  Future<void> editorAction(String action, [int? viewId]) =>
+      channel.invokeMethod(
+        'editorAction',
+        viewId == null ? action : {'viewId': viewId, 'action': action},
+      );
 }
 
 class PanelModel extends ChangeNotifier {
@@ -194,7 +200,7 @@ class PanelModel extends ChangeNotifier {
   PanelModel({Native? native}) : native = native ?? Native();
   List<Json> servers = [];
   String activeId = '', page = 'tasks';
-  String appVersion = '0.21.0';
+  String appVersion = '0.22.0';
   final Map<String, Json> forecasts = {};
   Json? systemInfo;
   Future<Json>? _systemLoad;
@@ -272,7 +278,7 @@ class PanelModel extends ChangeNotifier {
   bool demo = false, dark = false, nativeDock = false, initialized = false;
   double textScale = 1;
   String? startupError;
-  int epoch = 0, dockRequest = 0;
+  int epoch = 0, dockRequest = 0, taskSyncedAt = 0;
   final Map<String, List<Json>> cache = {};
   final Map<String, String> errors = {};
   final Set<String> loading = {};
@@ -295,6 +301,10 @@ class PanelModel extends ChangeNotifier {
       final data = Map<String, dynamic>.from(await native.call('bootstrap'));
       servers = rows(data['servers']);
       activeId = str(data['activeId']);
+      final initialPage = str(data['shortcutPage']);
+      if (['tasks', 'envs', 'scripts', 'more'].contains(initialPage)) {
+        page = initialPage;
+      }
       if (str(data['version']).isNotEmpty) appVersion = str(data['version']);
       dark = data['dark'] == true;
       textScale = (num.tryParse(str(data['textScale'])) ?? 1).toDouble().clamp(
@@ -312,7 +322,11 @@ class PanelModel extends ChangeNotifier {
     }
     initialized = true;
     notifyListeners();
-    if (startupError == null) unawaited(load('tasks'));
+    if (startupError == null) {
+      unawaited(
+        load(['tasks', 'envs', 'scripts'].contains(page) ? page : 'tasks'),
+      );
+    }
   }
 
   Future<dynamic> api(String method, String path, [dynamic body]) async {
@@ -342,7 +356,10 @@ class PanelModel extends ChangeNotifier {
         }
         if (token == epoch) {
           cache[key] = rows(data);
-          if (key == 'tasks') unawaited(forecastTasks());
+          if (key == 'tasks') {
+            taskSyncedAt = DateTime.now().millisecondsSinceEpoch;
+            unawaited(forecastTasks());
+          }
         }
       } catch (e) {
         if (token == epoch) errors[key] = '$e';
@@ -371,6 +388,7 @@ class PanelModel extends ChangeNotifier {
     _systemLoad = null;
     demo = demonstration;
     cache.clear();
+    taskSyncedAt = 0;
     loading.clear();
     _loads.clear();
     errors.clear();
@@ -446,7 +464,7 @@ class TaskScriptPlan {
   const TaskScriptPlan(this.files, this.shared, this.unresolvedTasks);
 }
 
-Json taskCopyValues(Json task) => {
+Json taskEditableValues(Json task) => {
   for (final key in [
     'name',
     'command',
@@ -460,6 +478,10 @@ Json taskCopyValues(Json task) => {
     'work_dir',
   ])
     if (task.containsKey(key)) key: jsonDecode(jsonEncode(task[key])),
+};
+
+Json taskCopyValues(Json task) => {
+  ...taskEditableValues(task),
   'name': '${str(task['name']).isEmpty ? '任务' : task['name']} 副本',
 };
 
@@ -1123,6 +1145,36 @@ class DemoPanel {
             );
     }
     if (resource == 'user') {
+      if (operation == 'login-log') {
+        return [
+          {
+            'timestamp': DateTime.utc(
+              2026,
+              10,
+              26,
+              7,
+              0,
+            ).millisecondsSinceEpoch,
+            'status': 0,
+            'ip': '192.0.2.10',
+            'address': '示例位置',
+            'platform': 'desktop',
+          },
+          {
+            'timestamp': DateTime.utc(
+              2026,
+              10,
+              26,
+              6,
+              30,
+            ).millisecondsSinceEpoch,
+            'status': 1,
+            'ip': '198.51.100.8',
+            'address': '示例位置',
+            'platform': 'mobile',
+          },
+        ];
+      }
       if (operation == 'notification') {
         if (method != 'GET') notification = Map<String, dynamic>.from(body);
         return notification;
@@ -1216,7 +1268,7 @@ class DemoPanel {
       }
       return result;
     }
-    if (resource == 'scripts' || resource == 'configs') {
+    if (resource == 'scripts' || resource == 'configs' || resource == 'logs') {
       final name = body['filename'] ?? body['name'] ?? '',
           key = [
             body['path'],
@@ -1226,7 +1278,13 @@ class DemoPanel {
         list.removeWhere(
           (r) => r['title'] == name && str(r['parent']) == str(body['path']),
         );
-        content.remove(key);
+        if (body['type'] == 'directory') {
+          content.removeWhere(
+            (name, _) => name == key || name.startsWith('$key/'),
+          );
+        } else {
+          content.remove(key);
+        }
         return null;
       }
       if (operation == 'rename') {

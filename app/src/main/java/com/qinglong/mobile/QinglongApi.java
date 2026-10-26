@@ -253,6 +253,20 @@ public final class QinglongApi {
             String message = authentication && code == 400
                     ? userMode ? "账号或密码不正确" : "Client ID 或 Client Secret 不正确"
                     : safeMessage(response.json.optString("message", ""), "面板请求失败");
+            if (!authentication && response.httpStatus == 400) {
+                JSONObject validation=response.json.optJSONObject("validation");
+                JSONObject body=validation==null?null:validation.optJSONObject("body");
+                JSONArray keys=body==null?null:body.optJSONArray("keys");
+                if(keys!=null&&keys.length()>0){
+                    StringBuilder fields=new StringBuilder();
+                    for(int i=0;i<Math.min(keys.length(),5);i++){
+                        String field=keys.optString(i,"");
+                        if(!field.matches("[A-Za-z_][A-Za-z_0-9.]{0,60}"))continue;
+                        if(fields.length()>0)fields.append("、");fields.append(field);
+                    }
+                    if(fields.length()>0)message="参数校验失败："+fields;
+                }
+            }
             throw new ApiException(response.httpStatus, code,
                     message + "（HTTP " + response.httpStatus + ", code " + code + "）");
         }

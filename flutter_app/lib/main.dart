@@ -22,6 +22,9 @@ part 'details.dart';
 part 'origin.dart';
 part 'task_delete.dart';
 part 'app_info.dart';
+part 'resource_actions.dart';
+part 'desktop.dart';
+part 'login_history.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,6 +46,12 @@ void main() {
 const accent = Color(0xff007aff),
     ink = Color(0xff1c2028),
     warm = Color(0xffad4938);
+
+void showAppToast(String message) {
+  unawaited(
+    Native.channel.invokeMethod<void>('toast', message).catchError((_) {}),
+  );
+}
 
 class QinglongApp extends StatefulWidget {
   final PanelModel model;
@@ -665,6 +674,7 @@ Future<String?> choose(
 
 class Field {
   final String key, label, help;
+  final String? section;
   final bool required, secret, multiline, toggle, readOnly, multiple;
   final Map<String, String>? options, presets;
   final bool Function(Json)? visible;
@@ -673,6 +683,7 @@ class Field {
     this.key,
     this.label, {
     this.help = '',
+    this.section,
     this.required = false,
     this.secret = false,
     this.multiline = false,
@@ -687,6 +698,8 @@ class Field {
 }
 
 class FormPage extends StatefulWidget {
+  final HomeState? host;
+  final bool modal;
   final String title, submit;
   final Json initial;
   final List<Field> fields;
@@ -698,6 +711,8 @@ class FormPage extends StatefulWidget {
     required this.save,
     this.initial = const {},
     this.submit = '保存',
+    this.host,
+    this.modal = false,
   });
   @override
   State<FormPage> createState() => _FormPageState();
@@ -737,7 +752,18 @@ class _FormPageState extends State<FormPage> {
         : current != initial;
   });
   @override
+  void initState() {
+    super.initState();
+    widget.host?.leaveGuards[this] = () async =>
+        !mounted ||
+        (!busy &&
+            (!hasChanges ||
+                await confirm(context, '放弃修改？', '切换页面后尚未保存的修改将丢失。')));
+  }
+
+  @override
   void dispose() {
+    widget.host?.leaveGuards.remove(this);
     for (final c in controllers.values) {
       c.dispose();
     }
@@ -752,12 +778,275 @@ class _FormPageState extends State<FormPage> {
     });
     try {
       await widget.save({...values});
-      if (mounted) Navigator.pop(context, true);
+      if (mounted) {
+        showAppToast(widget.submit.contains('上传') ? '上传完成' : '已保存');
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  bool get sectioned => widget.fields.any((f) => f.section != null);
+  List<Widget> buildFields() {
+    final visible = widget.fields
+        .where((f) => f.visible?.call(values) ?? true)
+        .toList();
+    if (!sectioned) return visible.map(buildField).toList();
+    final groups = <String, List<Field>>{};
+    for (final field in visible) {
+      groups.putIfAbsent(field.section ?? '其他设置', () => []).add(field);
+    }
+    return [
+      for (final group in groups.entries) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(3, 4, 3, 9),
+          child: Text(
+            group.key,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          alignment: Alignment.topCenter,
+          child: GlassCard(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: group.value.map(buildField).toList(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+      ],
+    ];
+  }
+
+  Widget buildField(Field f) {
+    void changed(dynamic value) {
+      setState(() {
+        values[f.key] = value;
+        f.changed?.call(values);
+        if (f.changed != null &&
+            controllers.containsKey(f.key) &&
+            controllers[f.key]!.text != str(values[f.key])) {
+          controllers[f.key]!.text = str(values[f.key]);
+        }
+        for (final e in controllers.entries) {
+          if (e.key != f.key && e.value.text != str(values[e.key])) {
+            e.value.text = str(values[e.key]);
+          }
+        }
+      });
+    }
+
+    if (f.toggle) {
+      return SwitchListTile.adaptive(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 3),
+        dense: sectioned,
+        visualDensity: sectioned
+            ? VisualDensity.compact
+            : VisualDensity.standard,
+        title: Text(f.label),
+        subtitle: f.help.isEmpty ? null : Text(f.help),
+        value: flag(values[f.key]),
+        onChanged: busy ? null : changed,
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 17),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${f.required ? '* ' : ''}${f.label}',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 7),
+          if (f.multiple)
+            FormField<List<String>>(
+              initialValue: List<String>.from(values[f.key] as List? ?? []),
+              validator: (value) => f.required && (value?.isEmpty ?? true)
+                  ? '请至少勾选一项${f.label}'
+                  : null,
+              builder: (field) {
+                final chosen = field.value ?? <String>[];
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Material(
+                      color: _surface(context),
+                      clipBehavior: Clip.antiAlias,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(
+                          color: field.hasError
+                              ? Theme.of(context).colorScheme.error
+                              : _line(context),
+                        ),
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns =
+                              constraints.maxWidth >= 300 &&
+                                  MediaQuery.textScalerOf(context).scale(13) <=
+                                      16
+                              ? 2
+                              : 1;
+                          return Wrap(
+                            children: [
+                              for (final entry in f.options!.entries)
+                                SizedBox(
+                                  width: constraints.maxWidth / columns,
+                                  child: CheckboxListTile(
+                                    key: ValueKey('scope-${entry.key}'),
+                                    value: chosen.contains(entry.key),
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    dense: true,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                    ),
+                                    title: Text(
+                                      entry.value,
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                    onChanged: busy
+                                        ? null
+                                        : (checked) {
+                                            FocusScope.of(context).unfocus();
+                                            final next = [...?field.value];
+                                            if (checked == true) {
+                                              next.add(entry.key);
+                                            } else {
+                                              next.remove(entry.key);
+                                            }
+                                            field.didChange(next);
+                                            changed(next);
+                                          },
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      field.errorText ?? '已选择 ${chosen.length} 项权限',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: field.hasError
+                            ? Theme.of(context).colorScheme.error
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            )
+          else if (f.options != null)
+            DropdownButtonFormField<String>(
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              borderRadius: BorderRadius.circular(14),
+              dropdownColor: _surface(context),
+              initialValue: f.options!.containsKey(str(values[f.key]))
+                  ? str(values[f.key])
+                  : null,
+              isExpanded: true,
+              items: f.options!.entries
+                  .map(
+                    (e) => DropdownMenuItem(value: e.key, child: Text(e.value)),
+                  )
+                  .toList(),
+              onChanged: busy ? null : changed,
+              validator: (v) =>
+                  f.required && (v ?? '').isEmpty ? '请选择${f.label}' : null,
+            )
+          else
+            TextFormField(
+              decoration: sectioned
+                  ? InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: _soft(context),
+                    )
+                  : null,
+              style: const TextStyle(fontSize: 13),
+              controller: controllers[f.key],
+              obscureText: f.secret,
+              readOnly: f.readOnly,
+              enabled: !busy,
+              maxLines: f.secret
+                  ? 1
+                  : f.multiline
+                  ? 6
+                  : 1,
+              minLines: f.multiline && !sectioned ? 2 : 1,
+              onChanged: changed,
+              autocorrect: false,
+              enableSuggestions: !f.secret,
+              validator: (v) => f.required && (v ?? '').trim().isEmpty
+                  ? '请填写${f.label}'
+                  : null,
+            ),
+          if (f.help.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(f.help, style: Theme.of(context).textTheme.bodySmall),
+            ),
+          if (f.presets != null) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 2,
+              children: [
+                for (final entry in f.presets!.entries)
+                  ChoiceChip(
+                    key: ValueKey('preset-${f.key}-${entry.value}'),
+                    label: Text(
+                      entry.key,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    selected: str(values[f.key]).trim() == entry.value,
+                    tooltip: entry.value,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: busy || f.readOnly
+                        ? null
+                        : (_) {
+                            FocusScope.of(context).unfocus();
+                            controllers[f.key]!.value = TextEditingValue(
+                              text: entry.value,
+                              selection: TextSelection.collapsed(
+                                offset: entry.value.length,
+                              ),
+                            );
+                            changed(entry.value);
+                          },
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -774,6 +1063,14 @@ class _FormPageState extends State<FormPage> {
     },
     child: Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.modal,
+        leading: widget.modal
+            ? IconButton(
+                tooltip: '关闭',
+                icon: const Icon(Icons.close),
+                onPressed: busy ? null : () => Navigator.maybePop(context),
+              )
+            : null,
         title: Text(widget.title, style: const TextStyle(fontSize: 16)),
       ),
       body: Form(
@@ -785,237 +1082,7 @@ class _FormPageState extends State<FormPage> {
               GlassCard(
                 child: Text(error!, style: const TextStyle(color: Colors.red)),
               ),
-            ...widget.fields.where((f) => f.visible?.call(values) ?? true).map((
-              f,
-            ) {
-              void changed(dynamic value) {
-                setState(() {
-                  values[f.key] = value;
-                  f.changed?.call(values);
-                  if (f.changed != null &&
-                      controllers.containsKey(f.key) &&
-                      controllers[f.key]!.text != str(values[f.key])) {
-                    controllers[f.key]!.text = str(values[f.key]);
-                  }
-                  for (final e in controllers.entries) {
-                    if (e.key != f.key && e.value.text != str(values[e.key])) {
-                      e.value.text = str(values[e.key]);
-                    }
-                  }
-                });
-              }
-
-              if (f.toggle) {
-                return SwitchListTile.adaptive(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 3),
-                  title: Text(f.label),
-                  subtitle: f.help.isEmpty ? null : Text(f.help),
-                  value: flag(values[f.key]),
-                  onChanged: busy ? null : changed,
-                );
-              }
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 17),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${f.required ? '* ' : ''}${f.label}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    if (f.multiple)
-                      FormField<List<String>>(
-                        initialValue: List<String>.from(
-                          values[f.key] as List? ?? [],
-                        ),
-                        validator: (value) =>
-                            f.required && (value?.isEmpty ?? true)
-                            ? '请至少勾选一项${f.label}'
-                            : null,
-                        builder: (field) {
-                          final chosen = field.value ?? <String>[];
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Material(
-                                color: _surface(context),
-                                clipBehavior: Clip.antiAlias,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(
-                                    color: field.hasError
-                                        ? Theme.of(context).colorScheme.error
-                                        : _line(context),
-                                  ),
-                                ),
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final columns =
-                                        constraints.maxWidth >= 300 &&
-                                            MediaQuery.textScalerOf(context)
-                                                    .scale(13) <=
-                                                16
-                                        ? 2
-                                        : 1;
-                                    return Wrap(
-                                      children: [
-                                        for (final entry in f.options!.entries)
-                                          SizedBox(
-                                            width:
-                                                constraints.maxWidth / columns,
-                                            child: CheckboxListTile(
-                                              key: ValueKey(
-                                                'scope-${entry.key}',
-                                              ),
-                                              value: chosen.contains(entry.key),
-                                              controlAffinity:
-                                                  ListTileControlAffinity
-                                                      .leading,
-                                              dense: true,
-                                              contentPadding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 4,
-                                                  ),
-                                              title: Text(
-                                                entry.value,
-                                                style: const TextStyle(
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                              onChanged: busy
-                                                  ? null
-                                                  : (checked) {
-                                                      FocusScope.of(context)
-                                                          .unfocus();
-                                                      final next = [
-                                                        ...?field.value,
-                                                      ];
-                                                      if (checked == true) {
-                                                        next.add(entry.key);
-                                                      } else {
-                                                        next.remove(entry.key);
-                                                      }
-                                                      field.didChange(next);
-                                                      changed(next);
-                                                    },
-                                            ),
-                                          ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              Text(
-                                field.errorText ?? '已选择 ${chosen.length} 项权限',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: field.hasError
-                                      ? Theme.of(context).colorScheme.error
-                                      : Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      )
-                    else if (f.options != null)
-                      DropdownButtonFormField<String>(
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                        dropdownColor: _surface(context),
-                        initialValue: f.options!.containsKey(str(values[f.key]))
-                            ? str(values[f.key])
-                            : null,
-                        isExpanded: true,
-                        items: f.options!.entries
-                            .map(
-                              (e) => DropdownMenuItem(
-                                value: e.key,
-                                child: Text(e.value),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: busy ? null : changed,
-                        validator: (v) => f.required && (v ?? '').isEmpty
-                            ? '请选择${f.label}'
-                            : null,
-                      )
-                    else
-                      TextFormField(
-                        style: const TextStyle(fontSize: 13),
-                        controller: controllers[f.key],
-                        obscureText: f.secret,
-                        readOnly: f.readOnly,
-                        enabled: !busy,
-                        maxLines: f.secret
-                            ? 1
-                            : f.multiline
-                            ? 6
-                            : 1,
-                        minLines: f.multiline ? 2 : 1,
-                        onChanged: changed,
-                        autocorrect: false,
-                        enableSuggestions: !f.secret,
-                        validator: (v) => f.required && (v ?? '').trim().isEmpty
-                            ? '请填写${f.label}'
-                            : null,
-                      ),
-                    if (f.help.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 5),
-                        child: Text(
-                          f.help,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ),
-                    if (f.presets != null) ...[
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 2,
-                        children: [
-                          for (final entry in f.presets!.entries)
-                            ChoiceChip(
-                              key: ValueKey('preset-${f.key}-${entry.value}'),
-                              label: Text(
-                                entry.key,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              selected:
-                                  str(values[f.key]).trim() == entry.value,
-                              tooltip: entry.value,
-                              visualDensity: VisualDensity.compact,
-                              onSelected: busy || f.readOnly
-                                  ? null
-                                  : (_) {
-                                      FocusScope.of(context).unfocus();
-                                      controllers[f.key]!.value =
-                                          TextEditingValue(
-                                            text: entry.value,
-                                            selection: TextSelection.collapsed(
-                                              offset: entry.value.length,
-                                            ),
-                                          );
-                                      changed(entry.value);
-                                    },
-                            ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              );
-            }),
+            ...buildFields(),
           ],
         ),
       ),
@@ -1059,10 +1126,23 @@ class Home extends StatefulWidget {
 }
 
 class HomeState extends State<Home> with WidgetsBindingObserver {
+  final leaveGuards = <Object, Future<bool> Function()>{};
+  String? pendingShortcut, lastWidgetFingerprint;
+  bool shortcutBusy = false;
+  Future<void> openShortcut(String page) => navigateShortcut(page);
   int? bodyEpoch;
   List<Widget> retainedPages = [];
   Object? homeSnapshot;
   void modelChanged() {
+    syncHomeWidget();
+    if (m.initialized && pendingShortcut != null) {
+      final page = pendingShortcut!;
+      pendingShortcut = null;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => navigateShortcut(page),
+      );
+      WidgetsBinding.instance.scheduleFrame();
+    }
     final next = (
       m.initialized,
       m.startupError,
@@ -1097,11 +1177,15 @@ class HomeState extends State<Home> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     m.addListener(modelChanged);
     Native.channel.setMethodCallHandler((call) async {
+      if (call.method == 'shortcutNavigate') {
+        await consumeShortcut();
+      }
       if (call.method == 'dockNavigate') {
         m.dockRequest = (call.arguments['request'] as num).toInt();
         m.navigate(str(call.arguments['page']));
       }
     });
+    unawaited(consumeShortcut());
     poll = Timer.periodic(const Duration(seconds: 4), (_) => pollTasks());
   }
 
@@ -1155,6 +1239,7 @@ class HomeState extends State<Home> with WidgetsBindingObserver {
               }
             }
           }
+          m.taskSyncedAt = DateTime.now().millisecondsSinceEpoch;
           m.changed();
           final now = DateTime.now().millisecondsSinceEpoch;
           if (old.any(
@@ -1233,15 +1318,55 @@ class HomeState extends State<Home> with WidgetsBindingObserver {
     Json initial,
     Future<void> Function(Json) save, {
     String submit = '保存',
-  }) => route<bool>(
-    FormPage(
+  }) async {
+    final compact =
+        fields.length <= 2 &&
+        fields.every((f) => !f.multiline && !f.multiple && !f.secret);
+    final page = FormPage(
+      host: this,
       title: title,
       fields: fields,
       initial: initial,
       save: save,
       submit: submit,
-    ),
-  );
+      modal: compact,
+    );
+    if (!compact) return route<bool>(page);
+    return overlay(
+      () => showDialog<bool>(
+        context: context,
+        builder: (c) {
+          final available =
+              MediaQuery.sizeOf(c).height -
+              MediaQuery.viewInsetsOf(c).bottom -
+              48;
+          return Dialog(
+            backgroundColor: _surface(c),
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 24,
+            ),
+            child: MediaQuery.removeViewInsets(
+              context: c,
+              removeBottom: true,
+              child: SizedBox(
+                width: 440,
+                height: math
+                    .min(190 + fields.length * 86, math.max(160, available))
+                    .toDouble(),
+                child: page,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> newRow(String key, [Json? row]) async {
     if (key == 'tasks') {
       await taskForm(row);

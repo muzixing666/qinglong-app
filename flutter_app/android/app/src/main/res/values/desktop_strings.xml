@@ -1,0 +1,5 @@
+<resources>
+<string name="shortcut_tasks">定时任务</string><string name="shortcut_envs">环境变量</string>
+<string name="shortcut_scripts">脚本文件</string><string name="shortcut_more">面板管理</string>
+<string name="panel_widget_label">青龙掌控 · 状态与快捷入口</string>
+</resources>

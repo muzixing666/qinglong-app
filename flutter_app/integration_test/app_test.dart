@@ -1,4 +1,7 @@
 import 'dart:ui' as ui;
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +13,15 @@ import 'package:qinglong_mobile/reference_ui/liquid_glass.dart' as fg;
 import 'package:qinglong_mobile/reference_ui/icons/icons.dart' as fi;
 
 class TrackingNative extends Native {
+  bool failEditorReads = false;
+  @override
+  Future<String> editorGet([int? viewId]) {
+    if (failEditorReads) {
+      throw PlatformException(code: 'EDITOR', message: '模拟连接异常');
+    }
+    return super.editorGet(viewId);
+  }
+
   Json dockState = {};
   @override
   Future<dynamic> call(String action, [Json payload = const {}]) {
@@ -36,13 +48,17 @@ void main() {
     expect(model.initialized, isTrue);
     expect(model.demo, isTrue);
     expect(model.nativeDock, isTrue);
+    final desktop = await Native.channel.invokeMapMethod<String, dynamic>(
+      'desktopCapabilities',
+    );
+    expect(desktop?['shortcuts'], 4);
     expect(find.text('定时任务'), findsOneWidget);
     final optics = await model.native.call('dockDebug');
     expect(optics['visible'], isFalse);
     expect(find.byType(fc.NavigationDock), findsOneWidget);
     expect(fg.LiquidGlassHost.debugShaderLoaded, isTrue);
     final bootstrap = await model.native.call('bootstrap');
-    expect(bootstrap['version'], '0.21.0');
+    expect(bootstrap['version'], '0.22.0');
     final forecast = await native.call('forecastTasks', {
       'timezone': 'Asia/Shanghai',
       'now': DateTime.utc(2026, 1, 1).millisecondsSinceEpoch,
@@ -201,6 +217,32 @@ void main() {
     expect(find.byType(EditorPage), findsOneWidget);
     final initial = await model.native.editorGet();
     expect(initial, contains('Backup started'));
+    final editorHost = tester.state<HomeState>(
+      find.byType(Home, skipOffstage: false),
+    );
+    unawaited(
+      editorHost.route(
+        EditorPage(
+          host: editorHost,
+          kind: 'scripts',
+          node: {'title': 'nested.py', 'parent': ''},
+          content: 'print("nested")',
+          scope: model.epoch,
+        ),
+      ),
+    );
+    await frames(20);
+    expect(await model.native.editorGet(), contains('nested'));
+    await tester.tap(find.byTooltip('返回').first);
+    await frames(10);
+    expect(await model.native.editorGet(), contains('Backup started'));
+    native.failEditorReads = true;
+    await tester.tap(find.byTooltip('返回').first);
+    await frames(5);
+    expect(find.text('编辑器连接异常'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await frames(5);
+    native.failEditorReads = false;
     await tester.tap(find.text('编辑工具'));
     await frames(5);
     expect(find.text('搜索'), findsOneWidget);
@@ -213,6 +255,10 @@ void main() {
       '\n# integration-only demo change\n',
     );
     await frames(5);
+    expect(
+      await Native.channel.invokeMethod<String>('editorRecovery'),
+      contains('integration-only'),
+    );
     expect(await model.native.editorGet(), contains('integration-only'));
     await tester.tap(find.byTooltip('返回').first);
     await frames(5);
@@ -225,11 +271,32 @@ void main() {
     await tester.tap(find.byTooltip('返回').first);
     await frames(10);
     expect(find.byType(EditorPage), findsNothing);
+    await tester.tap(find.text('每日数据备份').first);
+    await frames(20);
+    native.failEditorReads = true;
+    await tester.tap(find.byTooltip('返回').first);
+    await frames(5);
+    expect(find.text('编辑器连接异常'), findsOneWidget);
+    await tester.tap(find.text('直接返回'));
+    await frames(10);
+    native.failEditorReads = false;
+    expect(find.byType(EditorPage), findsNothing);
     await tester.tap(find.byTooltip('更多操作').first);
     await frames(5);
+    model.demoPanel.log = List.generate(
+      150,
+      (i) => 'demo log line $i',
+    ).join('\n');
     await tester.tap(find.text('查看日志'));
     await frames(10);
     expect(find.byType(LogPage), findsOneWidget);
+    await tester.tap(find.byTooltip('返回顶部'));
+    await frames(5);
+    final logScroll = tester
+        .widget<SingleChildScrollView>(find.byType(SingleChildScrollView).last)
+        .controller;
+    expect(logScroll?.offset, 0);
+
     expect(find.byType(TextField), findsNothing);
     final before = model.demoPanel.log.length;
     await frames(25);

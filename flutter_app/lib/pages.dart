@@ -25,6 +25,11 @@ class _ResourcePageState extends State<ResourcePage>
   bool editing = false;
   int filter = 0;
   String directory = '';
+  bool groupEnvs = false, envReordering = false;
+  final collapsedEnvNames = <String>{};
+  final envMoves = <({String source, String target, bool after, int scope})>[];
+  List<Json>? envCommitted;
+  int envOrderScope = -1;
   @override
   bool get wantKeepAlive => true;
   @override
@@ -286,10 +291,17 @@ extension Management on HomeState {
       duplicate ? taskCopyValues(row!) : row ?? {'schedule': '0 9 * * *'},
       (v) async {
         if (!validCron(v['schedule'])) throw ApiFailure('定时规则格式不正确');
-        await m.api(create ? 'POST' : 'PUT', '/crons', {
-          ...v,
-          if (!create) 'id': row['id'] ?? row['_id'],
-        });
+        await m.api(
+          create ? 'POST' : 'PUT',
+          '/crons',
+          create
+              ? taskEditableValues(v)
+              : {
+                  for (final key in ['name', 'command', 'schedule'])
+                    key: v[key],
+                  'id': row['id'] ?? row['_id'],
+                },
+        );
         await m.load('tasks', force: true);
       },
     );
@@ -305,7 +317,11 @@ extension Management on HomeState {
       ],
       row ?? {},
       (v) async {
-        final body = {...v, if (row != null) 'id': row['id'] ?? row['_id']};
+        final body = {
+          for (final key in ['name', 'value', 'remarks', 'labels'])
+            if (v.containsKey(key)) key: v[key],
+          if (row != null) 'id': row['id'] ?? row['_id'],
+        };
         await m.api(
           row == null ? 'POST' : 'PUT',
           '/envs',
@@ -787,9 +803,13 @@ Future<void> showAboutDialogResult(BuildContext context) async {
   showAboutDialog(
     context: context,
     applicationName: '青龙掌控',
-    applicationVersion: '0.21.0 · Flutter',
+    applicationVersion: '0.22.0 · Flutter',
     applicationIcon: Image.asset('assets/app-icon.png', width: 50, height: 50),
-    children: [const Text('连接已有青龙面板。功能可用性以面板版本、接口和当前账号权限为准。')],
+    children: [
+      const Text('by：Muzixing'),
+      const SizedBox(height: 8),
+      const Text('连接已有青龙面板。功能可用性以面板版本、接口和当前账号权限为准。'),
+    ],
   );
 }
 

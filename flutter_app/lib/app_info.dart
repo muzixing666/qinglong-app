@@ -49,6 +49,7 @@ class _AppInfoPageState extends State<AppInfoPage> {
                       ),
                     ),
                     const SizedBox(height: 8),
+                    const Text('by：Muzixing', style: TextStyle(fontSize: 12)),
                     const Text(
                       '从 GitHub Releases 获取正式安装包和版本说明。更新时请覆盖安装，以保留已有连接。',
                     ),

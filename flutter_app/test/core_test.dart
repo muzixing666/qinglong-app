@@ -26,6 +26,34 @@ class FakeNative extends Native {
 }
 
 void main() {
+  test('editable task payload excludes runtime fields without changing advanced settings', () {
+    final clean = taskEditableValues({
+      'id': 7,
+      'name': 'a',
+      'command': 'task a.py',
+      'schedule': '0 9 * * *',
+      'status': 1,
+      'pid': 99,
+      'createdAt': 'now',
+      'updatedAt': 'now',
+      'last_execution_time': 10,
+      'labels': ['demo'],
+      'task_before': 'echo demo',
+      'work_dir': '/ql/data/scripts',
+    });
+    expect(
+      clean.keys,
+      unorderedEquals([
+        'name',
+        'command',
+        'schedule',
+        'labels',
+        'task_before',
+        'work_dir',
+      ]),
+    );
+    expect(clean['task_before'], 'echo demo');
+  });
   test('editor normalizes line endings without hiding real edits', () {
     expect(editorText('a\r\nb\rc\n'), 'a\nb\nc\n');
     expect(editorText('a\r\n'), editorText('a\n'));

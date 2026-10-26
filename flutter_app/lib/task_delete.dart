@@ -36,6 +36,9 @@ extension TaskDeleteFlow on HomeState {
         ),
       );
     }
+    if (result.failedScripts.isEmpty && result.retainedScripts.isEmpty) {
+      showAppToast('任务已删除');
+    }
     return true;
   }
 }

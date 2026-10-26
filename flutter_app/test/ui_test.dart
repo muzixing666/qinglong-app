@@ -6,6 +6,8 @@ import 'package:qinglong_mobile/core.dart';
 import 'package:qinglong_mobile/main.dart';
 
 class UiNative extends Native {
+  final String? initialPage;
+  UiNative({this.initialPage});
   final calls = <String>[];
   final copied = <String>[];
   @override
@@ -19,9 +21,57 @@ class UiNative extends Native {
       };
     }
     if (action == 'bootstrap') {
-      return {'servers': [], 'activeId': '', 'nativeDock': false};
+      return {
+        'servers': [],
+        'activeId': '',
+        'nativeDock': false,
+        if (initialPage != null) 'shortcutPage': initialPage,
+      };
     }
     return {};
+  }
+}
+
+class _StrictTaskModel extends PanelModel {
+  _StrictTaskModel() : super(native: UiNative());
+  Json? sent;
+  @override
+  Future<dynamic> api(String method, String path, [dynamic body]) async {
+    if (method == 'PUT' && path == '/crons') {
+      sent = Map<String, dynamic>.from(body);
+      const allowed = {
+        'id',
+        'name',
+        'command',
+        'schedule',
+        'labels',
+        'extra_schedules',
+        'task_before',
+        'task_after',
+        'log_name',
+        'allow_multiple_instances',
+        'work_dir',
+        'sub_id',
+      };
+      if (sent!.keys.any((key) => !allowed.contains(key))) {
+        throw ApiFailure('validation failed (HTTP 400)');
+      }
+    }
+    return super.api(method, path, body);
+  }
+}
+
+class _DelayedEnvModel extends PanelModel {
+  _DelayedEnvModel() : super(native: UiNative());
+  final gate = Completer<void>();
+  bool first = true;
+  @override
+  Future<dynamic> api(String method, String path, [dynamic body]) async {
+    if (first && method == 'PUT' && path.endsWith('/move')) {
+      first = false;
+      await gate.future;
+    }
+    return super.api(method, path, body);
   }
 }
 
@@ -31,17 +81,295 @@ Future<void> frames(WidgetTester tester, [int count = 8]) async {
   }
 }
 
-Future<PanelModel> launch(WidgetTester tester) async {
+Future<PanelModel> launch(WidgetTester tester, {PanelModel? supplied}) async {
   tester.view.reset();
   tester.view.physicalSize = const Size(1080, 1920);
   tester.view.devicePixelRatio = 3;
-  final model = PanelModel(native: UiNative());
+  final model = supplied ?? PanelModel(native: UiNative());
   await tester.pumpWidget(QinglongApp(model: model));
   await frames(tester);
   return model;
 }
 
 void main() {
+  testWidgets('small configuration opens as a dismissible modal', (
+    tester,
+  ) async {
+    await launch(tester);
+    final host = tester.state<HomeState>(find.byType(Home));
+    unawaited(
+      host.form(
+        '日志清理设置',
+        [const Field('days', '保留天数')],
+        {'days': '7'},
+        (_) async {},
+      ),
+    );
+    await frames(tester);
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(tester.widget<Dialog>(find.byType(Dialog)).clipBehavior, Clip.antiAlias);
+    expect(find.text('日志清理设置'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await frames(tester);
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.text('放弃修改？'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('login history separates result time source and device', (
+    tester,
+  ) async {
+    await launch(tester);
+    final host = tester.state<HomeState>(find.byType(Home));
+    unawaited(host.route(LoginHistoryPage(host: host)));
+    await frames(tester);
+    expect(find.text('登录成功'), findsOneWidget);
+    expect(find.text('登录失败'), findsOneWidget);
+    expect(find.text('IP：192.0.2.10'), findsOneWidget);
+    expect(find.text('登录端：电脑端'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ChoiceChip, '失败'));
+    await frames(tester);
+    expect(find.text('登录成功'), findsNothing);
+    expect(find.text('登录失败'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets(
+    'cold shortcut selects its first page without loading tasks first',
+    (tester) async {
+      final model = await launch(
+        tester,
+        supplied: PanelModel(native: UiNative(initialPage: 'envs')),
+      );
+      expect(model.page, 'envs');
+      expect(model.cache.containsKey('tasks'), isFalse);
+      expect(find.text('环境变量'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets('shortcut respects unsaved form changes before leaving', (
+    tester,
+  ) async {
+    final model = await launch(tester);
+    final host = tester.state<HomeState>(find.byType(Home));
+    unawaited(
+      host.form(
+        '编辑测试',
+        [const Field('name', '名称')],
+        {'name': 'before'},
+        (_) async {},
+      ),
+    );
+    await frames(tester);
+    await tester.enterText(find.byType(TextFormField), 'after');
+    final denied = host.openShortcut('envs');
+    await frames(tester);
+    expect(find.text('放弃修改？'), findsOneWidget);
+    await tester.tap(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('取消')),
+    );
+    await frames(tester);
+    await denied;
+    expect(find.byType(FormPage), findsOneWidget);
+    expect(model.page, 'tasks');
+    final accepted = host.openShortcut('scripts');
+    await frames(tester);
+    await tester.tap(find.text('确认'));
+    await frames(tester);
+    await accepted;
+    expect(find.byType(FormPage), findsNothing);
+    expect(model.page, 'scripts');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('existing task edit submits only panel-editable fields', (
+    tester,
+  ) async {
+    final strict = _StrictTaskModel();
+    final model = await launch(tester, supplied: strict);
+    final host = tester.state<HomeState>(find.byType(Home));
+    model.cache['tasks']!.first['log_name'] = 'legacy(unsafe)';
+    unawaited(host.taskForm(model.cache['tasks']!.first));
+    await frames(tester);
+    await tester.enterText(find.byType(TextFormField).last, '0 10 * * *');
+    await tester.tap(find.text('保存'));
+    await frames(tester);
+    expect(find.byType(FormPage), findsNothing);
+    expect(strict.sent?['id'], 1);
+    expect(strict.sent?['schedule'], '0 10 * * *');
+    expect(strict.sent?.containsKey('createdAt'), isFalse);
+    expect(
+      strict.sent!.keys,
+      unorderedEquals(['id', 'name', 'command', 'schedule']),
+    );
+    expect(model.cache['tasks']!.first['status'], 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('a real handle drag reorders the card without losing its state', (
+    tester,
+  ) async {
+    final model = await launch(tester);
+    tester.view.physicalSize = const Size(1080, 2400);
+    model.navigate('envs');
+    await frames(tester);
+    final handles = find.byIcon(Icons.drag_handle);
+    final start = tester.getCenter(handles.first),
+        end = tester.getCenter(handles.at(1));
+    final gesture = await tester.startGesture(start);
+    await tester.pump(const Duration(milliseconds: 100));
+    for (var step = 1; step <= 12; step++) {
+      await gesture.moveTo(
+        Offset.lerp(start, end + const Offset(0, 20), step / 12)!,
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await frames(tester, 4);
+    await gesture.up();
+    await frames(tester, 12);
+    expect(model.cache['envs']!.map(idOf).toList(), ['32', '31', '33']);
+    expect(rows(model.demoPanel.data['envs']).map(idOf).toList(), [
+      '32',
+      '31',
+      '33',
+    ]);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    tester.view.reset();
+  });
+  testWidgets(
+    'consecutive drags update immediately while remote saves are queued',
+    (tester) async {
+      final delayed = _DelayedEnvModel();
+      final model = await launch(tester, supplied: delayed);
+      model.navigate('envs');
+      await frames(tester);
+      tester
+          .widget<ReorderableListView>(find.byType(ReorderableListView))
+          .onReorderItem!(0, 1);
+      await frames(tester, 1);
+      tester
+          .widget<ReorderableListView>(find.byType(ReorderableListView))
+          .onReorderItem!(2, 0);
+      await frames(tester, 1);
+      expect(model.cache['envs']!.map(idOf).toList(), ['33', '32', '31']);
+      expect(rows(model.demoPanel.data['envs']).map(idOf).toList(), [
+        '31',
+        '32',
+        '33',
+      ]);
+      expect(
+        tester
+            .widgetList<ReorderableDragStartListener>(
+              find.byType(ReorderableDragStartListener),
+            )
+            .every((w) => w.enabled),
+        isTrue,
+      );
+      delayed.gate.complete();
+      await frames(tester);
+      expect(rows(model.demoPanel.data['envs']).map(idOf).toList(), [
+        '33',
+        '32',
+        '31',
+      ]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets('environment order persists and name groups collapse', (
+    tester,
+  ) async {
+    final model = await launch(tester);
+    model.demoPanel.data['envs'] = <Json>[
+      {
+        'id': 31,
+        'name': 'JD_COOKIE',
+        'value': 'demo1',
+        'remarks': '第一账号',
+        'status': 0,
+      },
+      {'id': 32, 'name': 'OTHER', 'value': 'demo', 'status': 0},
+      {
+        'id': 33,
+        'name': 'JD_COOKIE',
+        'value': 'demo2',
+        'remarks': '第二账号',
+        'status': 0,
+      },
+    ];
+    model.navigate('envs');
+    await frames(tester);
+    await tester.tap(find.text('分组'));
+    await frames(tester);
+    expect(find.byKey(const ValueKey('env-group-JD_COOKIE')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('env-group-JD_COOKIE')));
+    await frames(tester);
+    expect(find.text('第一账号'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('env-group-JD_COOKIE')));
+    await frames(tester);
+    final groupTop = tester
+        .getTopLeft(find.byKey(const ValueKey('env-group-JD_COOKIE')))
+        .dy;
+    final order = tester.widget<ReorderableListView>(
+      find.byType(ReorderableListView).first,
+    );
+    order.onReorderItem!(1, 2);
+    await frames(tester);
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('env-group-JD_COOKIE'))).dy,
+      groupTop,
+    );
+    expect(model.cache['envs']!.map(idOf).toList(), ['32', '33', '31']);
+    expect(rows(model.demoPanel.data['envs']).map(idOf).toList(), [
+      '32',
+      '33',
+      '31',
+    ]);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('file folder deletion requires an explicit confirmation', (
+    tester,
+  ) async {
+    final model = await launch(tester);
+    model.demoPanel.data['scripts'] = <Json>[
+      {
+        'title': 'demo-folder',
+        'parent': '',
+        'type': 'directory',
+        'children': <Json>[
+          {'title': 'inside.py', 'type': 'file'},
+        ],
+      },
+    ];
+    model.demoPanel.content['demo-folder/inside.py'] = 'demo';
+    model.navigate('scripts');
+    await frames(tester);
+    await tester.longPress(find.text('demo-folder').first);
+    await frames(tester);
+    await tester.tap(find.text('删除文件夹'));
+    await frames(tester);
+    expect(find.text('确认删除文件夹？'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await frames(tester);
+    expect(
+      model.demoPanel.content.containsKey('demo-folder/inside.py'),
+      isTrue,
+    );
+    await tester.longPress(find.text('demo-folder').first);
+    await frames(tester);
+    await tester.tap(find.text('删除文件夹'));
+    await frames(tester);
+    await tester.tap(find.text('确认'));
+    await frames(tester);
+    expect(model.demoPanel.data['scripts'], isEmpty);
+    expect(
+      model.demoPanel.content.containsKey('demo-folder/inside.py'),
+      isFalse,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('dock shell stays fixed during drag and overscroll', (
     tester,
   ) async {
