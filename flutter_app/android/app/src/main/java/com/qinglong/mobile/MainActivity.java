@@ -112,7 +112,7 @@ public final class MainActivity extends FlutterActivity {
                         if(data.optString("serverId").equals(store.read().optString("activeId"))){
                             JSONObject previous=PanelWidgetProvider.snapshot(this);
                             if((data.optInt("total",-1)<0||data.optLong("updated")<previous.optLong("updated"))&&data.optString("serverId").equals(previous.optString("serverId"))&&previous.optInt("total",-1)>=0){previous.put("panel",data.optString("panel"));PanelWidgetProvider.publish(this,previous);}
-                            else PanelWidgetProvider.publish(this,data);
+                            else {if(data.optString("serverId").equals(previous.optString("serverId")))for(String key:new String[]{"version","platform","memory","uptime"})if(previous.has(key)&&!data.has(key))data.put(key,previous.opt(key));PanelWidgetProvider.publish(this,data);}
                         }
                     }catch(Exception ignored){}});
                     result.success(null);return;
@@ -486,7 +486,7 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private JSONObject publicState(JSONObject vault) throws Exception {
-        JSONObject result = new JSONObject().put("activeId", vault.optString("activeId")).put("version", "0.22.0");
+        JSONObject result = new JSONObject().put("activeId", vault.optString("activeId")).put("version", "0.22.1");
         JSONArray list = new JSONArray();
         JSONArray full = vault.getJSONArray("servers");
         for (int i = 0; i < full.length(); i++) {

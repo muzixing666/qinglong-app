@@ -58,7 +58,7 @@ void main() {
     expect(find.byType(fc.NavigationDock), findsOneWidget);
     expect(fg.LiquidGlassHost.debugShaderLoaded, isTrue);
     final bootstrap = await model.native.call('bootstrap');
-    expect(bootstrap['version'], '0.22.0');
+    expect(bootstrap['version'], '0.22.1');
     final forecast = await native.call('forecastTasks', {
       'timezone': 'Asia/Shanghai',
       'now': DateTime.utc(2026, 1, 1).millisecondsSinceEpoch,

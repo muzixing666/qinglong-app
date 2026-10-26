@@ -31,14 +31,15 @@ extension _DesktopNavigation on HomeState {
   void syncHomeWidget() {
     if (!m.initialized || (m.demo && m.servers.isNotEmpty)) return;
     final tasks = m.demo ? null : m.cache['tasks'];
-    final total = tasks?.length ?? -1,
-        active = tasks?.where((row) => row['status'] == 0).length ?? -1;
+    final summary = widgetTaskSummary(tasks);
+    final total = summary['total'], active = summary['running'];
     final server = m.servers
         .where((row) => str(row['id']) == m.activeId)
         .firstOrNull;
     final name = str(server?['name']).isEmpty ? '青龙面板' : str(server?['name']);
+    final names = summary['runningNames'] as List<String>;
     final fingerprint =
-        '${m.activeId}|$name|$total|$active|${m.taskSyncedAt ~/ 60000}|${m.dark}';
+        '${m.activeId}|$name|$total|$active|${m.taskSyncedAt ~/ 60000}|${m.dark}|${jsonEncode(names)}';
     if (fingerprint == lastWidgetFingerprint) return;
     lastWidgetFingerprint = fingerprint;
     unawaited(
@@ -48,6 +49,7 @@ extension _DesktopNavigation on HomeState {
             'panel': name,
             'total': total,
             'running': active,
+            'runningNames': names,
             'updated': m.taskSyncedAt,
           })
           .catchError((_) {}),
@@ -72,7 +74,7 @@ class DesktopPage extends StatelessWidget {
                 style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 10),
-              const Text('查看任务总数、运行中数量和更新时间，支持刷新及任务、变量、脚本快捷入口。'),
+              const Text('查看系统概况与运行任务，快捷进入任务、变量和脚本。'),
               const SizedBox(height: 14),
               FilledButton.icon(
                 icon: const Icon(Icons.add_to_home_screen, size: 18),

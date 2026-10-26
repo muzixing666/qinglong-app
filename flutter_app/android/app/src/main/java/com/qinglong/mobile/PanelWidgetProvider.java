@@ -13,7 +13,7 @@ import android.os.Bundle;
 import android.widget.RemoteViews;
 import org.json.JSONObject;
 
-/** Widget snapshots contain only a panel label, counters and freshness time. */
+/** Read-only widget snapshots: system summary, task counts and running names. */
 public final class PanelWidgetProvider extends AppWidgetProvider {
     static final String REFRESH="com.qinglong.mobile.WIDGET_REFRESH";
     static final int JOB=22001;
@@ -62,6 +62,18 @@ public final class PanelWidgetProvider extends AppWidgetProvider {
             String status=data.optString("status","");long updated=data.optLong("updated",0);
             if(status.isEmpty())status=updated>0?"更新于 "+new java.text.SimpleDateFormat("MM/dd HH:mm",java.util.Locale.CHINA).format(new java.util.Date(updated)):"打开 App 同步面板";
             v.setTextViewText(R.id.widget_status,status);
+            String version=data.optString("version","");String system=version.isEmpty()?"系统信息暂不可用":"青龙 "+version;
+            if(!data.optString("platform").isEmpty())system+=" · "+data.optString("platform");
+            if(data.has("memory"))system+=" · 内存 "+data.optString("memory")+"%";
+            if(data.has("uptime"))system+=" · 运行 "+(data.optLong("uptime")/3600)+"h";
+            v.setTextViewText(R.id.widget_system,system);
+            org.json.JSONArray names=data.optJSONArray("runningNames");StringBuilder activity=new StringBuilder();
+            if(names!=null)for(int i=0;i<names.length();i++){if(i>0)activity.append("\n");activity.append("• ").append(names.optString(i));}
+            if(data.optInt("running",-1)>3)activity.append("\n另有 ").append(data.optInt("running")-3).append(" 个任务运行中");
+            v.setTextViewText(R.id.widget_activity,activity.length()>0?activity.toString():data.optInt("running",-1)==0?"当前暂无运行任务":"打开 App 同步运行任务");
+            v.setTextColor(R.id.widget_system,muted);v.setTextColor(R.id.widget_activity,ink);
+            v.setViewVisibility(R.id.widget_activity,height>=210?android.view.View.VISIBLE:android.view.View.GONE);
+            v.setOnClickPendingIntent(R.id.widget_activity,open(c,"tasks"));
             v.setTextColor(R.id.widget_name,ink);v.setTextColor(R.id.widget_total,accent);v.setTextColor(R.id.widget_running,accent);
             for(int text:new int[]{R.id.widget_total_label,R.id.widget_running_label,R.id.widget_status})v.setTextColor(text,muted);
             for(int text:new int[]{R.id.widget_refresh,R.id.widget_tasks,R.id.widget_envs,R.id.widget_scripts})v.setTextColor(text,accent);

@@ -200,7 +200,7 @@ class PanelModel extends ChangeNotifier {
   PanelModel({Native? native}) : native = native ?? Native();
   List<Json> servers = [];
   String activeId = '', page = 'tasks';
-  String appVersion = '0.22.0';
+  String appVersion = '0.22.1';
   final Map<String, Json> forecasts = {};
   Json? systemInfo;
   Future<Json>? _systemLoad;
@@ -1363,4 +1363,21 @@ class DemoPanel {
     }
     return null;
   }
+}
+
+Json widgetTaskSummary(List<Json>? tasks) {
+  final active = tasks?.where((row) => row['status'] == 0).toList();
+  return {
+    'total': tasks?.length ?? -1,
+    'running': active?.length ?? -1,
+    'runningNames':
+        active
+            ?.take(3)
+            .map(
+              (row) =>
+                  str(row['name']).trim().isEmpty ? '未命名任务' : str(row['name']),
+            )
+            .toList() ??
+        <String>[],
+  };
 }

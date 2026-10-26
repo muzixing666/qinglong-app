@@ -333,4 +333,18 @@ void main() {
     });
     expect(digest(demo.content['backup.py']!), detail['version']['hash']);
   });
+  test('widget separates running tasks from queued tasks and limits names', () {
+    expect(widgetTaskSummary(null)['running'], -1);
+    expect(widgetTaskSummary([])['running'], 0);
+    final summary = widgetTaskSummary([
+      {'status': 3, 'name': 'queued'},
+      {'status': 0, 'name': 'one'},
+      {'status': 0, 'name': 'two'},
+      {'status': 0, 'name': ''},
+      {'status': 0, 'name': 'four'},
+    ]);
+    expect(summary['total'], 5);
+    expect(summary['running'], 4);
+    expect(summary['runningNames'], ['one', 'two', '未命名任务']);
+  });
 }

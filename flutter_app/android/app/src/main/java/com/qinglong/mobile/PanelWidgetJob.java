@@ -21,9 +21,12 @@ public final class PanelWidgetJob extends JobService {
                     :new QinglongApi(selected.getString("url"),selected.optString("clientId"),selected.optString("clientSecret"));
                 Object payload=api.request("GET","/crons",null).opt("data");
                 JSONArray tasks=payload instanceof JSONArray?(JSONArray)payload:payload instanceof JSONObject?((JSONObject)payload).optJSONArray("data"):null;
-                if(tasks==null)throw new java.io.IOException("任务列表格式无效");int running=0;
-                for(int i=0;i<tasks.length();i++){int status=tasks.getJSONObject(i).optInt("status",1);if(status==0)running++;}
-                if(current==generation&&active.equals(store.read().optString("activeId")))PanelWidgetProvider.publish(this,new JSONObject().put("serverId",active).put("panel",selected.optString("name","青龙面板")).put("total",tasks.length()).put("running",running).put("updated",System.currentTimeMillis()));
+                if(tasks==null)throw new java.io.IOException("任务列表格式无效");int running=0;JSONArray names=new JSONArray();
+                for(int i=0;i<tasks.length();i++){int status=tasks.getJSONObject(i).optInt("status",1);if(status==0){running++;if(names.length()<3)names.put(tasks.getJSONObject(i).optString("name","未命名任务"));}}
+                JSONObject snapshot=new JSONObject().put("serverId",active).put("panel",selected.optString("name","青龙面板")).put("total",tasks.length()).put("running",running).put("runningNames",names).put("updated",System.currentTimeMillis());
+                try{JSONObject system=api.request("GET","/system",null).optJSONObject("data");if(system!=null)snapshot.put("version",system.optString("version"));}catch(Exception ignored){}
+                try{JSONObject system=api.request("GET","/dashboard/system",null).optJSONObject("data");if(system!=null){snapshot.put("platform",system.optString("platform"));if(system.has("memUsagePercent"))snapshot.put("memory",system.opt("memUsagePercent"));if(system.has("uptime"))snapshot.put("uptime",system.opt("uptime"));}}catch(Exception ignored){}
+                if(current==generation&&active.equals(store.read().optString("activeId")))PanelWidgetProvider.publish(this,snapshot);
             } catch(Exception e){
                 if(current==generation)PanelWidgetProvider.status(this,e instanceof QinglongApi.ApiException&&((QinglongApi.ApiException)e).httpStatus==401?"请打开 App 重新登录":"刷新失败，点击刷新重试");
             } finally {if(current==generation)jobFinished(params,false);}
